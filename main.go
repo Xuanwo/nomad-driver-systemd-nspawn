@@ -14,5 +14,5 @@ func main() {
 
 // factory returns a new instance of the LXC driver plugin
 func factory(log log.Logger) interface{} {
-	return systemd.NewSystemdNspawnDriver(log)
+	return systemd.NewSystemdNSpawnDriver(log)
 }
