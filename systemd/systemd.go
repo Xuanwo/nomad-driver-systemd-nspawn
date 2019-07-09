@@ -1,9 +1,13 @@
 package systemd
 
 import (
+	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/coreos/go-systemd/dbus"
+	"github.com/coreos/go-systemd/import1"
 	"github.com/coreos/go-systemd/machine1"
 	log "github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/nomad/plugins/drivers"
@@ -12,6 +16,7 @@ import (
 var (
 	dbusConn     *dbus.Conn
 	machinedConn *machine1.Conn
+	importdConn  *import1.Conn
 )
 
 // Machine Object in dbus.
@@ -74,12 +79,61 @@ const (
 
 // CreateMachine will create a new systemd-nspawn machine.
 func (d *Driver) CreateMachine(cfg *drivers.TaskConfig, taskConfig TaskConfig) (m *Machine, err error) {
-	panic("implement me")
-}
+	machineName := fmt.Sprintf("%s-%s", strings.Replace(cfg.Name, "/", "_", -1), cfg.AllocID)
 
-// CreateMachineWithNetwork will create a new systemd-nspawn machine with network.
-func (d *Driver) CreateMachineWithNetwork() {
-	panic("implement me")
+	trans, err := importdConn.PullRaw(taskConfig.Image, machineName, "no", false)
+	if err != nil {
+		return
+	}
+
+	// FIXME: So stupid, let's use signal instead.
+	for {
+		ts, err := importdConn.ListTransfers()
+		if err != nil {
+			return nil, err
+		}
+		found := false
+		for _, v := range ts {
+			if v.Id == trans.Id {
+				found = true
+				break
+			}
+		}
+		if !found {
+			break
+		}
+	}
+
+	// Create nspawn file.
+	f, err := os.Create("/etc/systemd/nspawn/" + machineName)
+	if err != nil {
+		d.logger.Error("Create nspawn file failed", "error", err)
+		return
+	}
+	defer f.Close()
+
+	err = tmpl.Execute(f, taskConfig)
+	if err != nil {
+		d.logger.Error("Generate nspawn file failed", "error", err)
+		return
+	}
+
+	// Start machine along with image and nspawn file.
+	ch := make(chan string)
+	defer close(ch)
+	_, err = dbusConn.StartUnit(
+		fmt.Sprintf("systemd-nspawn@%s.service", machineName), "replace", ch)
+	if err != nil {
+		d.logger.Error("Create machine unit failed", "error", err)
+		return
+	}
+
+	job := <-ch
+	if job != "done" {
+		d.logger.Error("Start machine unit failed")
+	}
+
+	return
 }
 
 // GetMachine will get a new systemd-nspawn machine.
@@ -111,5 +165,10 @@ func init() {
 	machinedConn, err = machine1.New()
 	if err != nil {
 		log.Default().Error("systemd-machined connected failed", err)
+	}
+
+	importdConn, err = import1.New()
+	if err != nil {
+		log.Default().Error("systemd-importd connected failed", err)
 	}
 }

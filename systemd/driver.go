@@ -78,6 +78,11 @@ type Config struct {
 
 // TaskConfig is the driver configuration of a task within a job
 type TaskConfig struct {
+	// Image section
+
+	// Image is the image name.
+	Image string
+
 	// Exec section
 
 	// Boot takes a boolean argument, which defaults to off.
